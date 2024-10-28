@@ -24,13 +24,14 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Linq.Dynamic.Core;
 using System.Reflection;
 using System.Threading.Tasks;
-using DateTime = System.DateTime;
+using Magicodes.IE.Excel.Images;
+using SixLabors.ImageSharp;
+using ImageExtensions = Magicodes.IE.Excel.Images.ImageExtensions;
 
 namespace Magicodes.ExporterAndImporter.Excel.Utility
 {
@@ -56,9 +57,10 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
         /// <summary>
         /// </summary>
         /// <param name="stream"></param>
-        public ImportHelper(Stream stream)
+        public ImportHelper(Stream stream, Stream labelingFileStream)
         {
             Stream = stream;
+            LabelingFileStream = labelingFileStream;
         }
 
         /// <summary>
@@ -107,6 +109,7 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
         ///     标注文件路径
         /// </summary>
         public string LabelingFilePath { get; }
+        public Stream LabelingFileStream { get; set; }
 
         /// <summary>
         ///     导入结果
@@ -145,7 +148,7 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
         ///     导入模型验证数据
         /// </summary>
         /// <returns></returns>
-        public Task<ImportResult<T>> Import(string filePath = null)
+        public Task<ImportResult<T>> Import(string filePath = null, Func<ImportResult<T>, ImportResult<T>> importResultCallback = null)
         {
             if (!string.IsNullOrWhiteSpace(filePath)) FilePath = filePath;
             ImportResult = new ImportResult<T>();
@@ -215,6 +218,14 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
                         }
 
                         #endregion 执行结果筛选器
+
+
+                        #region 执行结果回调 zhenhua.shen 2022.1.7
+                        if (importResultCallback != null)
+                        {
+                            ImportResult = importResultCallback(ImportResult);
+                        }
+                        #endregion
 
                         //生成Excel错误标注
                         LabelingError(excelPackage);
@@ -330,8 +341,8 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
         /// <param name="excelPackage"></param>
         internal virtual void LabelingError(ExcelPackage excelPackage)
         {
-            //如果源路径为空则不允许生成标注文件
-            if (string.IsNullOrWhiteSpace(FilePath))
+            //如果源路径为空且标注流也为空则不允许生成标注文件
+            if (string.IsNullOrWhiteSpace(FilePath) && LabelingFileStream == null)
             {
                 return;
             }
@@ -352,7 +363,7 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
 
                 //TODO:标注模板错误
                 //标注数据错误
-                var excelRangeList = new List<ExcelRange> { worksheet.Cells[1, 1, 1, worksheet.Dimension.Columns] };
+                var excelRangeList = new List<ExcelRange> { worksheet.Cells[FromRow: ExcelImporterSettings.HeaderRowIndex, FromCol: 1, ToRow: ExcelImporterSettings.HeaderRowIndex, ToCol: worksheet.Dimension.Columns] };
                 foreach (var item in ImportResult.RowErrors)
                 {
                     var gtRows = EmptyRows.Where(r => r > item.RowIndex);
@@ -365,7 +376,11 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
 
                     foreach (var field in item.FieldErrors)
                     {
-                        var col = ImporterHeaderInfos.First(p => p.Header.Name == field.Key);
+                        var col = ImporterHeaderInfos.FirstOrDefault(p => p.Header.Name == field.Key);
+                        if (col == null)
+                        {
+                            throw new Exception($"'{field.Key}'.The column name does not exist!");
+                        }
                         var cell = worksheet.Cells[item.RowIndex, col.Header.ColumnIndex];
                         cell.Style.Font.Color.SetColor(Color.Red);
                         cell.Style.Font.Bold = true;
@@ -391,17 +406,22 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
                     excelPackage.Workbook.Worksheets.Add($"{worksheet.Name}-{Resource.WrongData}");
                     var newWorksheet = GetImportSheet(excelPackage);
 
+                    //var startRowIndex = ExcelImporterSettings.HeaderRowIndex - 1;
                     for (int i = 0; i < excelRangeList.Count; i++)
                     {
                         excelRangeList[i].Copy(newWorksheet.Cells[i + 1, 1, i + 1, worksheet.Dimension.Columns]);
                     }
                 }
-
-                var ext = Path.GetExtension(FilePath);
-                var filePath = string.IsNullOrWhiteSpace(LabelingFilePath)
-                    ? FilePath.Replace(ext, "_" + ext)
-                    : LabelingFilePath;
-                excelPackage.SaveAs(new FileInfo(filePath));
+                if (LabelingFileStream == null)
+                {
+                    var ext = Path.GetExtension(FilePath);
+                    var filePath = string.IsNullOrWhiteSpace(LabelingFilePath)
+                        ? FilePath.Replace(ext, "_" + ext)
+                        : LabelingFilePath;
+                    excelPackage.SaveAs(new FileInfo(filePath));
+                    return;
+                }
+                excelPackage.SaveAs(LabelingFileStream);
             }
         }
 
@@ -534,6 +554,115 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
             }
         }
 
+        protected virtual void ParseTemplate(ExcelPackage excelPackage, ImportResultEnumer<T> importResult)
+        {
+            importResult.TemplateErrors = new List<TemplateErrorInfo>();
+            try
+            {
+                //根据名称获取Sheet，如果不存在则取第一个
+                var worksheet = GetImportSheet(excelPackage);
+                var excelHeaders = new Dictionary<string, int>();
+                var endColumnCount = ExcelImporterSettings.EndColumnCount ?? worksheet.Dimension.End.Column;
+                if (!string.IsNullOrWhiteSpace(ExcelImporterSettings.ImportDescription))
+                {
+                    ExcelImporterSettings.HeaderRowIndex++;
+                }
+
+                for (var columnIndex = 1; columnIndex <= endColumnCount; columnIndex++)
+                {
+                    var header = worksheet.Cells[ExcelImporterSettings.HeaderRowIndex, columnIndex].Text;
+
+                    //如果未设置读取的截止列，则默认指定为出现空格，则读取截止
+                    if (ExcelImporterSettings.EndColumnCount.HasValue &&
+                        columnIndex > ExcelImporterSettings.EndColumnCount.Value ||
+                        string.IsNullOrWhiteSpace(header))
+                        break;
+
+                    //不处理空表头
+                    if (string.IsNullOrWhiteSpace(header)) continue;
+
+                    if (excelHeaders.ContainsKey(header))
+                        importResult.TemplateErrors.Add(new TemplateErrorInfo
+                        {
+                            ErrorLevel = ErrorLevels.Error,
+                            ColumnName = header,
+                            RequireColumnName = null,
+                            Message = Resource.ColumnHeadRepeat
+                        });
+
+                    excelHeaders.Add(header, columnIndex);
+                }
+
+                foreach (var item in ImporterHeaderInfos)
+                {
+                    //支持忽略列名的大小写
+                    var isColumnExist = false;
+                    if (ExcelImporterSettings.IsIgnoreColumnCase)
+                    {
+                        var excelHeaderName = (excelHeaders.Keys.FirstOrDefault(p => p.Equals(item.Header.Name, StringComparison.CurrentCultureIgnoreCase)));
+                        isColumnExist = excelHeaderName != null;
+                        if (isColumnExist)
+                        {
+                            item.Header.Name = excelHeaderName;
+                        }
+                    }
+                    else
+                    {
+                        isColumnExist = excelHeaders.ContainsKey(item.Header.Name);
+                    }
+                    if (!isColumnExist)
+                    {
+                        if (item.Header.ColumnIndex > 0)
+                        {
+                            item.IsExist = true;
+                            continue;
+                        }
+
+                        //仅验证必填字段
+                        if (item.IsRequired)
+                        {
+                            importResult.TemplateErrors.Add(new TemplateErrorInfo
+                            {
+                                ErrorLevel = ErrorLevels.Error,
+                                ColumnName = null,
+                                RequireColumnName = item.Header.Name,
+                                Message = Resource.ImportTemplateNotFoundThisField
+                            });
+                            continue;
+                        }
+
+                        importResult.TemplateErrors.Add(new TemplateErrorInfo
+                        {
+                            ErrorLevel = ErrorLevels.Warning,
+                            ColumnName = null,
+                            RequireColumnName = item.Header.Name,
+                            Message = Resource.ImportTemplateNotFoundThisField
+                        });
+                    }
+                    else
+                    {
+                        item.IsExist = true;
+                        //设置列索引
+                        if (item.Header.ColumnIndex == 0)
+                            item.Header.ColumnIndex = excelHeaders[item.Header.Name];
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                importResult.TemplateErrors.Add(new TemplateErrorInfo
+                {
+                    ErrorLevel = ErrorLevels.Error,
+                    ColumnName = null,
+                    RequireColumnName = null,
+                    Message = $"{Resource.AnUnknownErrorOccurredInTheTemplate}{ex}"
+                });
+                throw new Exception($"{Resource.AnUnknownErrorOccurredInTheTemplate}{ex.Message}", ex);
+            }
+ 
+        }
+
+
         /// <summary>
         ///     解析模板
         /// </summary>
@@ -649,11 +778,14 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
         ///     解析头部
         /// </summary>
         /// <returns></returns>
-        /// <exception cref="ArgumentException">导入实体没有定义ImporterHeader属性</exception>
+        /// <exception cref = "ArgumentException" > 导入实体没有定义ImporterHeader属性 
+        /// </exception>
         protected virtual bool ParseHeader()
         {
             ImporterHeaderInfos = new List<ImporterHeaderInfo>();
-            var objProperties = typeof(T).GetProperties();
+            // var objProperties = typeof(T).GetProperties();
+            var objProperties = typeof(T).GetSortedPropertyInfos();
+
             if (objProperties.Length == 0) return false;
 
             foreach (var propertyInfo in objProperties)
@@ -1005,12 +1137,6 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
                 column - 1);
             return excelDrawings as ExcelPicture;
         }
-
-        /// <summary>
-        ///     解析数据
-        /// </summary>
-        /// <returns></returns>
-        /// <exception cref="ArgumentException">支持最大导入条数限制，默认50000</exception>
         protected virtual void ParseData(ExcelPackage excelPackage)
         {
             var worksheet = GetImportSheet(excelPackage);
@@ -1074,8 +1200,9 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
 
                                     var value = col.MappingValues[cellValue];
 
-                                    if (isEnum && isNullable && (value is int || value is short) &&
-                                        Enum.IsDefined(type, value))
+                                    if (isEnum && isNullable && (value is int || value is short)
+                                        // && Enum.IsDefined(type, value)
+                                        )
                                     {
                                         SetValue(cell, dataItem, propertyInfo, value == null ? null : Enum.ToObject(type, value));
                                     }
@@ -1101,18 +1228,21 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
                                 if (col.ImportImageFieldAttribute != null)
                                 {
                                     var excelPicture = GetImage(worksheet, cell.Start.Row, cell.Start.Column);
-
-                                    var path = Path.Combine(col.ImportImageFieldAttribute.ImageDirectory, Guid.NewGuid() + "." + excelPicture.ImageFormat);
+                                    if (excelPicture == null)
+                                    {
+                                        continue;
+                                    }
+                                    var path = Path.Combine(col.ImportImageFieldAttribute.ImageDirectory, Guid.NewGuid() + "." + excelPicture.ImageFormat.FileExtensions.First());
                                     var value = string.Empty;
 
                                     switch (col.ImportImageFieldAttribute.ImportImageTo)
                                     {
                                         case ImportImageTo.TempFolder:
-                                            value = Extension.Save(excelPicture?.Image, path, excelPicture.ImageFormat);
+                                            value = excelPicture.Image.SaveTo(path);
                                             break;
 
                                         case ImportImageTo.Base64:
-                                            value = excelPicture.Image.ToBase64String(excelPicture.ImageFormat);
+                                            value = ImageExtensions.ToBase64String(excelPicture.Image, excelPicture.ImageFormat);
                                             break;
 
                                         default:
@@ -1355,6 +1485,46 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
                                     }
                                     break;
 
+                                case "TimeSpan":
+                                    {
+                                        if (cell.Value == null || cell.Text.IsNullOrWhiteSpace())
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectTimeSpanFormat}");
+                                            break;
+                                        }
+                                        try
+                                        {
+                                            var ts = TimeSpan.Parse(cellValue);
+                                            SetValue(cell, dataItem, propertyInfo, ts);
+                                        }
+                                        catch (Exception)
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectTimeSpanFormat}");
+                                            break;
+                                        }
+                                    }
+                                    break;
+
+                                case "Nullable<TimeSpan>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cell.Text))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+                                        try
+                                        {
+                                            var ts = TimeSpan.Parse(cellValue);
+                                            SetValue(cell, dataItem, propertyInfo, ts);
+                                        }
+                                        catch (Exception)
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectTimeSpanFormat}");
+                                            break;
+                                        }
+                                    }
+                                    break;
+
                                 case "DateTimeOffset":
                                     {
                                         if (!DateTimeOffset.TryParse(cell.Text, out var date))
@@ -1377,8 +1547,15 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
 
                                         if (!DateTime.TryParse(cell.Text, out var date))
                                         {
-                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Text} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
-                                            break;
+                                            if (cell.Value is DateTime value)
+                                            {
+                                                date = value;
+                                            }
+                                            else
+                                            {
+                                                AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Text} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
+                                                break;
+                                            }
                                         }
 
                                         SetValue(cell, dataItem, propertyInfo, date);
@@ -1445,6 +1622,501 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility
                     }
 
                     ImportResult.Data.Add(dataItem);
+                }
+            }
+        }
+
+
+        /// <summary>
+        ///     解析数据
+        /// </summary>
+        /// <returns></returns>
+        /// <exception cref="ArgumentException">支持最大导入条数限制，默认50000</exception>
+        protected virtual IEnumerable<T> ParseDataEnumer(ExcelPackage excelPackage)
+        {
+            var worksheet = GetImportSheet(excelPackage);
+
+            //检查导入最大条数限制
+            if (ExcelImporterSettings.MaxCount != 0
+                && ExcelImporterSettings.MaxCount != int.MaxValue
+                && worksheet.Dimension.End.Row > ExcelImporterSettings.MaxCount + ExcelImporterSettings.HeaderRowIndex
+                ) throw new ArgumentException($"{Resource.MaximumNumberImportsCannotExceeded}{ExcelImporterSettings.MaxCount}！");
+
+            // ImportResult.Data = new List<T>();
+            var propertyInfos = new List<PropertyInfo>(typeof(T).GetProperties());
+
+            for (var rowIndex = ExcelImporterSettings.HeaderRowIndex + 1;
+                rowIndex <= worksheet.Dimension.End.Row;
+                rowIndex++)
+            {
+                //跳过空行
+                if (worksheet.Cells[rowIndex, 1, rowIndex, worksheet.Dimension.End.Column].All(p => p.Text == string.Empty))
+                {
+                    EmptyRows.Add(rowIndex);
+                    continue;
+                }
+                {
+                    var dataItem = new T();
+                    foreach (var propertyInfo in propertyInfos.Where(p =>
+                        ImporterHeaderInfos.Any(p1 => p1.PropertyName == p.Name && p1.IsExist)))
+                    {
+                        var col = ImporterHeaderInfos.First(a => a.PropertyName == propertyInfo.Name);
+
+                        var cell = worksheet.Cells[rowIndex, col.Header.ColumnIndex];
+
+                        try
+                        {
+                            //如果是合并行并且值不为NULL，则暂存值
+                            if (cell.Merge && cell.Value == null)
+                            {
+                                var key = $"{propertyInfo.Name}-{cell.Worksheet.MergedCells[cell.Start.Row, cell.Start.Column]}";
+                                if (dicMergePreValues.ContainsKey(key))
+                                {
+                                    propertyInfo.SetValue(dataItem, dicMergePreValues[key]);
+                                    continue;
+                                }
+                            }
+
+                            var cellValue = cell.Value?.ToString();
+                            if (!cellValue.IsNullOrWhiteSpace())
+                            {
+                                if (col.MappingValues.Count > 0 &&
+                                    (col.MappingValues.ContainsKey(cellValue)))
+                                {
+                                    //TODO:进一步缓存并优化
+                                    var isEnum = propertyInfo.PropertyType.IsEnum;
+                                    var isNullable = propertyInfo.PropertyType.IsNullable();
+                                    var type = propertyInfo.PropertyType;
+                                    if (isNullable)
+                                    {
+                                        type = propertyInfo.PropertyType.GetNullableUnderlyingType();
+                                        isEnum = type.IsEnum;
+                                    }
+
+                                    var value = col.MappingValues[cellValue];
+
+                                    if (isEnum && isNullable && (value is int || value is short)
+                                        // && Enum.IsDefined(type, value)
+                                        )
+                                    {
+                                        SetValue(cell, dataItem, propertyInfo, value == null ? null : Enum.ToObject(type, value));
+                                    }
+                                    else
+                                    {
+                                        SetValue(cell, dataItem, propertyInfo, value);
+                                    }
+                                    continue;
+                                }
+                                else if (propertyInfo.PropertyType.IsEnum
+                                    || (propertyInfo.PropertyType.IsNullable() && propertyInfo.PropertyType.GetNullableUnderlyingType().IsEnum)
+                                         )
+                                {
+                                    if (int.TryParse(cellValue, out int result))
+                                    {
+                                        SetValue(cell, dataItem, propertyInfo, result);
+                                        continue;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (col.ImportImageFieldAttribute != null)
+                                {
+                                    var excelPicture = GetImage(worksheet, cell.Start.Row, cell.Start.Column);
+                                    if (excelPicture == null)
+                                    {
+                                        continue;
+                                    }
+                                    var path = Path.Combine(col.ImportImageFieldAttribute.ImageDirectory, Guid.NewGuid() + "." + excelPicture.ImageFormat.FileExtensions.First());
+                                    var value = string.Empty;
+
+                                    switch (col.ImportImageFieldAttribute.ImportImageTo)
+                                    {
+                                        case ImportImageTo.TempFolder:
+                                            value = excelPicture.Image.SaveTo(path);
+                                            break;
+
+                                        case ImportImageTo.Base64:
+                                            value = ImageExtensions.ToBase64String(excelPicture.Image, excelPicture.ImageFormat);
+                                            break;
+
+                                        default:
+                                            break;
+                                    }
+                                    SetValue(cell, dataItem, propertyInfo, value);
+                                    continue;
+                                }
+                            }
+
+                            if (propertyInfo.PropertyType.IsEnum
+                                || (!propertyInfo.PropertyType.IsNullable() && propertyInfo.PropertyType.GetNullableUnderlyingType()?.IsEnum == true))
+                            {
+                                AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.ThereAreNoTemplateDropDownOptions}");
+                                continue;
+                            }
+
+                            switch (propertyInfo.PropertyType.GetCSharpTypeName())
+                            {
+                                case "Boolean":
+                                    SetValue(cell, dataItem, propertyInfo, false);
+                                    //AddRowDataError(rowIndex, col, $"值 {cellValue} 不存在模板下拉选项中");
+                                    break;
+
+                                case "Nullable<Boolean>":
+                                    if (string.IsNullOrWhiteSpace(cellValue))
+                                        SetValue(cell, dataItem, propertyInfo, null);
+                                    else
+                                        AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.Illegal}");
+                                    break;
+
+                                case "String":
+                                    //TODO:进一步优化
+                                    //移除所有的空格，包括中间的空格
+                                    if (col.Header.FixAllSpace)
+                                        SetValue(cell, dataItem, propertyInfo, cellValue?.Replace(" ", string.Empty));
+                                    else if (col.Header.AutoTrim)
+                                        SetValue(cell, dataItem, propertyInfo, cellValue?.Trim());
+                                    else
+                                        SetValue(cell, dataItem, propertyInfo, cellValue);
+
+                                    break;
+                                //long
+                                case "Int64":
+                                    {
+                                        if (!long.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectIntegerValue}");
+                                            break;
+                                        }
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Nullable<Int64>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!long.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectIntegerValue}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Int32":
+                                    {
+                                        if (!int.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectIntegerValue}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Nullable<Int32>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!int.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectIntegerValue}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Int16":
+                                    {
+                                        if (!short.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectIntegerValue}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Nullable<Int16>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!short.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectIntegerValue}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Decimal":
+                                    {
+                                        if (!decimal.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectDecimal}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Nullable<Decimal>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!decimal.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectDecimal}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Double":
+                                    {
+                                        if (!double.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectDecimal}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Nullable<Double>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!double.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectDecimal}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+                                //case "float":
+                                case "Single":
+                                    {
+                                        if (!float.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectDecimal}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "Nullable<Single>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!float.TryParse(cellValue, out var number))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectDecimal}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, number);
+                                    }
+                                    break;
+
+                                case "DateTime":
+                                    {
+                                        if (cell.Value == null || cell.Text.IsNullOrWhiteSpace())
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
+                                            break;
+                                        }
+                                        try
+                                        {
+                                            var date = cell.GetValue<DateTime>();
+                                            SetValue(cell, dataItem, propertyInfo, date);
+                                        }
+                                        catch (Exception)
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
+                                            break;
+                                        }
+                                    }
+                                    break;
+
+                                case "TimeSpan":
+                                    {
+                                        if (cell.Value == null || cell.Text.IsNullOrWhiteSpace())
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectTimeSpanFormat}");
+                                            break;
+                                        }
+                                        try
+                                        {
+                                            var ts = TimeSpan.Parse(cellValue);
+                                            SetValue(cell, dataItem, propertyInfo, ts);
+                                        }
+                                        catch (Exception)
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectTimeSpanFormat}");
+                                            break;
+                                        }
+                                    }
+                                    break;
+
+                                case "Nullable<TimeSpan>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cell.Text))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+                                        try
+                                        {
+                                            var ts = TimeSpan.Parse(cellValue);
+                                            SetValue(cell, dataItem, propertyInfo, ts);
+                                        }
+                                        catch (Exception)
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Value} {Resource.PleaseFillInTheCorrectTimeSpanFormat}");
+                                            break;
+                                        }
+                                    }
+                                    break;
+
+                                case "DateTimeOffset":
+                                    {
+                                        if (!DateTimeOffset.TryParse(cell.Text, out var date))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Text} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, date);
+                                    }
+                                    break;
+
+                                case "Nullable<DateTime>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cell.Text))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!DateTime.TryParse(cell.Text, out var date))
+                                        {
+                                            if (cell.Value is DateTime value)
+                                            {
+                                                date = value;
+                                            }
+                                            else
+                                            {
+                                                AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Text} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
+                                                break;
+                                            }
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, date);
+                                    }
+                                    break;
+
+                                case "Nullable<DateTimeOffset>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cell.Text))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!DateTimeOffset.TryParse(cell.Text, out var date))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cell.Text} {Resource.PleaseFillInTheCorrectDateAndTimeFormat}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, date);
+                                    }
+                                    break;
+
+                                case "Guid":
+                                    {
+                                        if (!Guid.TryParse(cellValue, out var guid))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectGUIDFormat}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, guid);
+                                    }
+                                    break;
+
+                                case "Nullable<Guid>":
+                                    {
+                                        if (string.IsNullOrWhiteSpace(cellValue))
+                                        {
+                                            SetValue(cell, dataItem, propertyInfo, null);
+                                            break;
+                                        }
+
+                                        if (!Guid.TryParse(cellValue, out var guid))
+                                        {
+                                            AddRowDataError(rowIndex, col, $"{Resource.Value} {cellValue} {Resource.PleaseFillInTheCorrectGUIDFormat}");
+                                            break;
+                                        }
+
+                                        SetValue(cell, dataItem, propertyInfo, guid);
+                                    }
+                                    break;
+
+                                default:
+                                    SetValue(cell, dataItem, propertyInfo, cell.Value);
+                                    break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AddRowDataError(rowIndex, col, ex.Message);
+                        }
+                    }
+
+                    yield return dataItem;
                 }
             }
         }

@@ -23,6 +23,12 @@ using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Magicodes.IE.Excel.Images;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats;
+using SkiaSharp;
+using Magicodes.IE.EPPlus;
+using System.Reflection;
 
 namespace Magicodes.ExporterAndImporter.Excel.Utility.TemplateExport
 {
@@ -172,21 +178,30 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility.TemplateExport
             if (!string.IsNullOrWhiteSpace(templateFilePath)) TemplateFilePath = templateFilePath;
             if (string.IsNullOrWhiteSpace(TemplateFilePath))
                 throw new ArgumentException(Resource.TemplateFilePathCannotBeEmpty, nameof(TemplateFilePath));
-            if (callback == null) return;
-
-            Data = data ?? throw new ArgumentException(Resource.DataCannotBeEmpty, nameof(data));
-
             using (Stream stream = new FileStream(TemplateFilePath, FileMode.Open))
             {
-                using (var excelPackage = new ExcelPackage(stream))
-                {
-                    ParseTemplateFile(excelPackage);
-
-                    ParseData(excelPackage);
-                    callback.Invoke(excelPackage);
-                }
+                Export(stream, data, callback);
             }
         }
+
+        /// <summary>
+        ///     根据模板导出Excel
+        /// </summary>
+        /// <param name="templateStream">模板文件流</param>
+        /// <param name="data"></param>
+        /// <param name="callback"></param>
+        /// <exception cref="ArgumentException">完成导出后执行的操作，默认导出无操作</exception>
+        public void Export(Stream templateStream, T data, Action<ExcelPackage> callback)
+        {
+            Data = data ?? throw new ArgumentException(Resource.DataCannotBeEmpty, nameof(data));
+            using (var excelPackage = new ExcelPackage(templateStream))
+            {
+                ParseTemplateFile(excelPackage);
+                ParseData(excelPackage);
+                callback?.Invoke(excelPackage);
+            }
+        }
+
 
         /// <summary>
         /// 处理数据
@@ -495,7 +510,7 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility.TemplateExport
                 cellFunc = CreateOrGetCellFunc(target, cellFunc, expresson, parameters);
 
                 var result = cellFunc.Invoke(invokeParams);
-                sheet.Cells[cellAddress].Value = IsDynamicSupportTypes ? result?.ToString() : result;
+                sheet.Cells[cellAddress].Value = result;
             }
             else if (!string.IsNullOrWhiteSpace(expresson))
             {
@@ -664,7 +679,7 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility.TemplateExport
                             //获取图片地址
                             var imageUrl = cellFunc.Invoke(invokeParams)?.ToString();
                             var cell = sheet.Cells[cellAddress];
-                            if (imageUrl == null || (!File.Exists(imageUrl) && !imageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)))
+                            if (imageUrl == null || (!File.Exists(imageUrl) && !imageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !imageUrl.IsBase64StringValid()))
                             {
                                 cell.Value = alt;
                             }
@@ -672,17 +687,37 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility.TemplateExport
                             {
                                 try
                                 {
-                                    var bitmap = Extension.GetBitmapByUrl(imageUrl);
-                                    if (bitmap == null)
+                                    Image image = null;
+                                    IImageFormat format = default;
+                                    if (imageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        image = imageUrl.GetImageByUrl(out format);
+                                    }
+                                    else if (imageUrl.IsBase64StringValid())
+                                    {
+                                        image = imageUrl.Base64StringToImage(out format);
+                                    }
+                                    else if (File.Exists(imageUrl))
+                                    {
+                                        using (Stream imageStream = File.OpenRead(imageUrl))
+                                        {
+                                            image = Image.Load(imageStream);
+                                            format = image.GetImageFormat(imageStream);
+                                        }
+
+                                        // image = Image.Load(imageUrl, out format);
+                                    }
+
+                                    if (image == null)
                                     {
                                         cell.Value = alt;
                                     }
                                     else
                                     {
-                                        if (height == default) height = bitmap.Height;
-                                        if (width == default) width = bitmap.Width;
+                                        if (height == default) height = image.Height;
+                                        if (width == default) width = image.Width;
                                         cell.Value = string.Empty;
-                                        var excelImage = sheet.Drawings.AddPicture(Guid.NewGuid().ToString(), bitmap);
+                                        var excelImage = sheet.Drawings.AddPicture(Guid.NewGuid().ToString(), image, format);
                                         var address = new ExcelAddress(cell.Address);
                                         ////调整对齐
                                         excelImage.From.ColumnOff = Pixel2MTU(xOffset);
@@ -693,7 +728,7 @@ namespace Magicodes.ExporterAndImporter.Excel.Utility.TemplateExport
                                         excelImage.SetSize(width, height);
                                     }
                                 }
-                                catch (Exception)
+                                catch (Exception ex)
                                 {
                                     cell.Value = alt;
                                 }

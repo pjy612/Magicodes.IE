@@ -1,8 +1,223 @@
 # Release Log
 
+## 2.7.5.0
+**2024.01.03**
+
+- 发布Magicodes.IE.Stash，具体见<https://github.com/dotnetcore/Magicodes.IE/pull/498>及<https://github.com/dotnetcore/Magicodes.IE/tree/master/src/Stash/Magicodes.IE.Stash>
+- 增加导入Stream时的回调委托参数<https://github.com/dotnetcore/Magicodes.IE/commit/e9a2a1b3b493fea90379b0ee519b7bbb42011122>
+- 增加ValueMappingsBase值映射特性基类，方便从外部(如：Abp框架)继承实现枚举、bool类型的多语言显示<https://github.com/dotnetcore/Magicodes.IE/pull/544>
+
+## 2.7.4.4
+**2023.04.22**
+
+- 修复获取导入错误文件流时，因批注行导致的无表头的问题
+
+## 2.7.4.3
+**2023.03.16**
+
+- 优化列名中不包含FieldErrors的key触发的异常信息
+- Excel模板导出，图片格式支持base64
+
+## 2.7.4.2
+**2023.01.04**
+
+- 重构表头排序
+
+## 2.7.4.1
+**2023.01.02**
+
+- Excel导出去除Task.FromResult包装，增加异步操作
+- 修改内部集合类，充分利用池化内存，降低内存分配
+
+## 2.7.4
+**2022.12.30**
+
+- Fix DateTime cell convert to Nullable<DateTime>，见pr [#475](https://github.com/dotnetcore/Magicodes.IE/pull/475)。
+
+## 2.7.3
+**2022.12.27**
+
+- 更新Haukcode.WkHtmlToPdfDotNet到1.5.86
+- tagetFrameworks移除net461
+
+## 2.7.2
+**2022.12.04**
+
+- 修复FontSize的Bug
+
+## 2.7.1
+**2022.12.01**
+
+- Magicodes.IE.EPPlus默认添加SkiaSharp.NativeAssets.Linux.NoDependencies包，以便于在Linux环境下使用
+- 导入验证支持将错误数据通过Stream的方式返回，感谢sampsonye （见pr[#466](https://github.com/dotnetcore/Magicodes.IE/pull/466)）
+
+## 2.7.0
+**2022.11.07**
+
+- 添加SkiaSharp
+- 移除SixLabors.Fonts
+- 感谢linch90的大力支持（具体见pr[#462](https://github.com/dotnetcore/Magicodes.IE/pull/462)） 
+- 部分方法改为虚方法
+
+## 2.7.0-beta
+**2022.10.27**
+
+-  使用SixLabors.ImageSharp替代System.Drawing，感谢linch90 （见pr[#454](https://github.com/dotnetcore/Magicodes.IE/pull/454)）
+
+## 2.6.9
+**2022.10.26**
+
+-  fix: 动态数据源导出到多个sheet的问题 （见[#449](https://github.com/dotnetcore/Magicodes.IE/issues/449)）
+
+## 2.6.8
+**2022.10.18**
+
+-  Excel模板导出添加API，以支持通过文件流模板：Task<byte[]> ExportBytesByTemplate<T>(T data, Stream templateStream)
+
+## 2.6.7
+**2022.10.12**
+
+- ExporterHeaderFilter支持修改列索引，以支持动态排序，需设置ExporterHeaderAttribute.ColumnIndex属性（注意不应修改Index属性），值范围为0~10000。设置错误会自动调整到相近的边界值。
+- 提供ExporterHeadersFilter筛选器，以支持批量修改列头。
+- 重构、优化列排序代码。
+
+## 2.6.5-beta1
+**2022.07.17**
+
+- 【修复】如果为动态类型导出，如datatable/dynamic/proxy等，会将原始数据转成字符串。
+- fix: 修复没有正确释放Graphics对象的问题 （见PR[#401](https://github.com/dotnetcore/Magicodes.IE/pull/401)）
+- feat(module: excel): Export of the byte type Enum value is allowed （见PR[#367](https://github.com/dotnetcore/Magicodes.IE/pull/367)）
+- feat(module: excel): The export can be of Nullable Enum type （见PR[#398](https://github.com/dotnetcore/Magicodes.IE/pull/398)）
+- fix(module: Excel): Excel ParseData
+
+## 2.6.4
+**2022.04.17**
+
+- 优化了ColumnIndex在生成模板时的实现，增加了ColumnIndex的单测（见PR[#385](https://github.com/dotnetcore/Magicodes.IE/pull/385)）。
+
+- 添加了NPOI的独立扩展包——Magicodes.IE.Excel.NPOI，以便于后续给用户提供更多的支持。目前仅提供了 SaveToExcelWithXSSFWorkbook 扩展方法。
+
+- 修复RequiredIfAttribute的Bug。
+
+- 修复导出JPG图片在Linux环境下可能引起的无限循环的问题（见PR[#396](https://github.com/dotnetcore/Magicodes.IE/pull/396)）。
+
+- Excel图片导入时，图片列支持为空。
+
+- 更新CsvHelper到最新版本，并修改相关代码。
+
+## 2.6.3
+**2022.03.06**
+
+- 完善筛选器注册机制，在指定了特性ImportHeaderFilter、ExporterHeaderFilter等值后，筛选器将匹配对于的类型（见PR[#384](https://github.com/dotnetcore/Magicodes.IE/pull/384)），如不指定则作为全局筛选器。如下述代码，注入了多个同类型的筛选器，通过指定了ImportHeaderFilter限制了此Dto仅使用ImportHeaderFilterB：
+```csharp
+    builder.Services.AddTransient<IImportHeaderFilter, ImportHeaderFilterA>();
+    builder.Services.AddTransient<IImportHeaderFilter, ImportHeaderFilterB>();
+    builder.Services.AddTransient<IImportHeaderFilter, ImportHeaderFilterC>();
+
+    [ExcelImporter(ImportHeaderFilter = typeof(ImportHeaderFilterB))]
+    public class ImportExcelTemplateDto
+    {
+        [ImporterHeader(Name = "TypeName")]
+        public string? Name { get; set; }
+    }
+```
+    
+
+
+## 2.6.2
+**2022.03.02**
+
+- Excel导入时增加回调函数，方便增加自定义验证（见PR[#369](https://github.com/dotnetcore/Magicodes.IE/pull/369)）：
+
+```csharp
+        [Fact(DisplayName = "导入结果回调函数测试")]
+        public async Task ImportResultCallBack_Test()
+        {
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "缴费流水导入模板.xlsx");
+            var import = await Importer.Import<ImportPaymentLogDto>(filePath, (importResult) =>
+            {
+                int rowNum = 2;//首行数据对应Excel中的行号
+                foreach (var importPaymentLogDto in importResult.Data)
+                {
+                    if (importPaymentLogDto.Amount > 5000)
+                    {
+                        var dataRowError = new DataRowErrorInfo();
+                        dataRowError.RowIndex = rowNum;
+                        dataRowError.FieldErrors.Add("Amount", "金额不能大于5000");
+                        importResult.RowErrors.Add(dataRowError);
+                    }
+                    rowNum++;
+                }
+                return importResult;
+            });
+            import.ShouldNotBeNull();
+            import.HasError.ShouldBeTrue();
+            import.RowErrors.ShouldContain(p => p.RowIndex == 3 && p.FieldErrors.ContainsKey("金额不能大于5000"));
+            import.Exception.ShouldBeNull();
+            import.Data.Count.ShouldBe(20);
+        }
+```
+
+- 优化获取DisplayName的逻辑（见PR[#372](https://github.com/dotnetcore/Magicodes.IE/pull/372)）
+
+- 导出CSV支持ColumnIndex（见PR[#381](https://github.com/dotnetcore/Magicodes.IE/pull/381)）
+
+- 优化Pdf导出逻辑，统一各平台导出代码
+
+## 2.6.1
+
+- 修复内存未及时回收
+
+## 2.6.0
+**2021.11.28**
+
+- 添加两个动态验证特性（见PR[#319 by Afonsof91](https://github.com/dotnetcore/Magicodes.IE/pull/359)）：
+
+  - 添加特性`DynamicStringLengthAttribute`,以便支持动态配置字符串长度验证。使用参考：
+
+  ```csharp
+  public class DynamicStringLengthImportDto
+  {
+      [ImporterHeader(Name = "名称")]
+      [Required(ErrorMessage = "名称不能为空")]
+      [DynamicStringLength(typeof(DynamicStringLengthImportDtoConsts), nameof(DynamicStringLengthImportDtoConsts.MaxNameLength), ErrorMessage = "名称字数不能超过{1}")]
+      public string Name { get; set; }
+  }
+  
+  public static class DynamicStringLengthImportDtoConsts
+  {
+      public static int MaxNameLength { get; set; } = 3;
+  }
+  ```
+
+  - 添加特性`RequiredIfAttribute`，以支持动态开启必填验证。使用参考：
+
+  ```csharp
+  public class RequiredIfAttributeImportDto
+  {
+      [ImporterHeader(Name = "名称是否必填")]
+      [Required(ErrorMessage = "名称是否必填不能为空")]
+      [ValueMapping("是", true)]
+      [ValueMapping("否", false)]
+      public bool IsNameRequired { get; set; }
+  
+      [ImporterHeader(Name = "名称")]
+      [RequiredIf("IsNameRequired", "True", ErrorMessage = "名称不能为空")]
+      [MaxLength(10, ErrorMessage = "名称字数超出最大值：10")]
+      public string Name { get; set; }
+  }
+  ```
+
+- CSV添加对分隔符的配置，具体见PR[#319 by Afonsof91](https://github.com/dotnetcore/Magicodes.IE/pull/319)
+
+- Excel导入添加对`TimeSpan`类型的支持，使用参考`TimeSpan_Test`
+
+- 初步添加对.NET6的适配
+
 ## 2.5.6.3
 **2021.10.23**
-- 导出日期格式化支持'DateTimeOffset'类型，具体见PR[#349](https://github.com/dotnetcore/Magicodes.IE/pull/349)，感谢[YaChengMu](https://github.com/YaChengMu)
+
+- 导出日期格式化支持`DateTimeOffset`类型，具体见PR[#349](https://github.com/dotnetcore/Magicodes.IE/pull/349)，感谢[YaChengMu](https://github.com/YaChengMu)
 - 修改Magicodes.IE.EPPlus的包依赖PR[#351](https://github.com/dotnetcore/Magicodes.IE/pull/351)
 
 ## 2.5.6.2
@@ -221,7 +436,7 @@
   - 支持数据验证
     - 支持MaxLengthAttribute、MinLengthAttribute、StringLengthAttribute、RangeAttribute
   - 支持输入提示 
-To fix The Mapping Values of The total length of a Data Validation list always exceed 255 characters (# 196) (https://github.com/dotnetcore/Magicodes.IE/issues/196)
+  To fix The Mapping Values of The total length of a Data Validation list always exceed 255 characters (# 196) (https://github.com/dotnetcore/Magicodes.IE/issues/196)
 - Excel export List data type errors, and formatting issues.[#191](https://github.com/dotnetcore/Magicodes.IE/issues/191) [193] (https://github.com/dotnetcore/Magicodes.IE/issues/193)
 - 导入Excel对Enum类型匹配值映射时，忽略值前后空格
 - fix MappingValues The total length of a DataValidation list cannot exceed 255 characters [#196](https://github.com/dotnetcore/Magicodes.IE/issues/196)

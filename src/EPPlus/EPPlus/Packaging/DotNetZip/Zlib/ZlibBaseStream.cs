@@ -24,9 +24,11 @@
 //
 // ------------------------------------------------------------------
 
+
 using OfficeOpenXml.Packaging.Ionic.Crc;
 using OfficeOpenXml.Utils;
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace OfficeOpenXml.Packaging.Ionic.Zlib
@@ -350,7 +352,7 @@ namespace OfficeOpenXml.Packaging.Ionic.Zlib
 
         private string ReadZeroTerminatedString()
         {
-            var list = new System.Collections.Generic.List<byte>();
+            var list = new List<byte>();
             bool done = false;
             do
             {
@@ -587,7 +589,7 @@ namespace OfficeOpenXml.Packaging.Ionic.Zlib
             // workitem 8460
             byte[] working = new byte[1024];
             var encoding = System.Text.Encoding.UTF8;
-            using (var output = RecyclableMemoryStream.GetStream())
+            using (var output = new MemoryStream())
             {
                 using (decompressor)
                 {
@@ -609,7 +611,7 @@ namespace OfficeOpenXml.Packaging.Ionic.Zlib
         {
             // workitem 8460
             byte[] working = new byte[1024];
-            using (var output = RecyclableMemoryStream.GetStream())
+            using (var output = new MemoryStream())
             {
                 using (decompressor)
                 {

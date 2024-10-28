@@ -33,8 +33,9 @@ using OfficeOpenXml.Utils;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Drawing;
+using SixLabors.ImageSharp;
 using System.Xml;
+
 
 namespace OfficeOpenXml.ConditionalFormatting
 {

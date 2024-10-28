@@ -45,7 +45,7 @@ using OfficeOpenXml.Table.PivotTable;
 using OfficeOpenXml.Utils;
 using System;
 using System.Collections.Generic;
-using System.Drawing;
+using SixLabors.ImageSharp;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -53,6 +53,9 @@ using System.Security;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
+using Magicodes.IE.EPPlus.SixLabors;
+using SixLabors.ImageSharp.PixelFormats;
+
 
 namespace OfficeOpenXml
 {
@@ -94,7 +97,7 @@ namespace OfficeOpenXml
     /// <summary>
     /// Represents an Excel Chartsheet and provides access to its properties and methods
     /// </summary>
-    public class ExcelChartsheet : ExcelWorksheet
+    public sealed class ExcelChartsheet : ExcelWorksheet
     {
         //ExcelDrawings draws;
         public ExcelChartsheet(XmlNamespaceManager ns, ExcelPackage pck, string relID, Uri uriWorksheet, string sheetName, int sheetID, int positionID, eWorkSheetHidden hidden, eChartType chartType, ExcelPivotTable pivotTableSource) :
@@ -755,16 +758,16 @@ namespace OfficeOpenXml
                 string col = GetXmlNodeString(tabColorPath);
                 if (col == "")
                 {
-                    return Color.Empty;
+                    return Color.Transparent;
                 }
                 else
                 {
-                    return Color.FromArgb(int.Parse(col, System.Globalization.NumberStyles.AllowHexSpecifier));
+                    return Color.ParseHex(col);
                 }
             }
             set
             {
-                SetXmlNodeString(tabColorPath, value.ToArgb().ToString("X"));
+                SetXmlNodeString(tabColorPath, value.ToArgbHex());
             }
         }
         const string codeModuleNamePath = "d:sheetPr/@codeName";
@@ -896,7 +899,7 @@ namespace OfficeOpenXml
 
             // now release stream buffer (already converted whole Xml into XmlDocument Object and String)
             stream.Dispose();
-            packPart.Stream = RecyclableMemoryStream.GetStream();
+            packPart.Stream = new MemoryStream();
 
             //first char is invalid sometimes?? 
             if (xml[0] != '<')
@@ -1168,6 +1171,7 @@ namespace OfficeOpenXml
         private void LoadHyperLinks(XmlReader xr)
         {
             if (!ReadUntil(xr, "hyperlinks", "rowBreaks", "colBreaks")) return;
+            var rIdCache = new Dictionary<string, Uri>();
             while (xr.Read())
             {
                 if (xr.LocalName == "hyperlink")
@@ -1178,7 +1182,10 @@ namespace OfficeOpenXml
                     if (xr.GetAttribute("id", ExcelPackage.schemaRelationships) != null)
                     {
                         var rId = xr.GetAttribute("id", ExcelPackage.schemaRelationships);
-                        var uri = Part.GetRelationship(rId).TargetUri;
+                        if (!rIdCache.TryGetValue(rId,out var uri))
+                        {
+                            uri = Part.GetRelationship(rId).TargetUri;
+                        }
                         if (uri.IsAbsoluteUri)
                         {
                             try
@@ -1196,6 +1203,7 @@ namespace OfficeOpenXml
                         }
                         hl.RId = rId;
                         Part.DeleteRelationship(rId); //Delete the relationship, it is recreated when we save the package.
+                        rIdCache[rId] = uri;
                     }
                     else if (xr.GetAttribute("location") != null)
                     {
@@ -3153,46 +3161,48 @@ namespace OfficeOpenXml
                 {
                     int colNum = tbl.Address._fromCol;
                     var colVal = new HashSet<string>();
-                    foreach (var col in tbl.Columns)
                     {
-                        string n = col.Name.ToLowerInvariant();
-                        if (tbl.ShowHeader)
+                        foreach (var col in tbl.Columns)
                         {
-                            n = tbl.WorkSheet.GetValue<string>(tbl.Address._fromRow,
-                                tbl.Address._fromCol + col.Position);
-                            if (string.IsNullOrEmpty(n))
+                            string n = col.Name.ToLowerInvariant();
+                            if (tbl.ShowHeader)
                             {
-                                n = col.Name.ToLowerInvariant();
-                                SetValueInner(tbl.Address._fromRow, colNum, ConvertUtil.ExcelDecodeString(col.Name));
+                                n = tbl.WorkSheet.GetValue<string>(tbl.Address._fromRow,
+                                    tbl.Address._fromCol + col.Position);
+                                if (string.IsNullOrEmpty(n))
+                                {
+                                    n = col.Name.ToLowerInvariant();
+                                    SetValueInner(tbl.Address._fromRow, colNum, ConvertUtil.ExcelDecodeString(col.Name));
+                                }
+                                else
+                                {
+                                    col.Name = n;
+                                }
                             }
                             else
                             {
-                                col.Name = n;
+                                n = col.Name.ToLowerInvariant();
                             }
-                        }
-                        else
-                        {
-                            n = col.Name.ToLowerInvariant();
-                        }
 
-                        if (colVal.Contains(n))
-                        {
-                            throw (new InvalidDataException(string.Format("Table {0} Column {1} does not have a unique name.", tbl.Name, col.Name)));
-                        }
-                        colVal.Add(n);
-                        if (!string.IsNullOrEmpty(col.CalculatedColumnFormula))
-                        {
-                            int fromRow = tbl.ShowHeader ? tbl.Address._fromRow + 1 : tbl.Address._fromRow;
-                            int toRow = tbl.ShowTotal ? tbl.Address._toRow - 1 : tbl.Address._toRow;
-                            string r1c1Formula = ExcelCellBase.TranslateToR1C1(col.CalculatedColumnFormula, fromRow, colNum);
-                            bool needsTranslation = r1c1Formula != col.CalculatedColumnFormula;
-
-                            for (int row = fromRow; row <= toRow; row++)
+                            if (colVal.Contains(n))
                             {
-                                SetFormula(row, colNum, needsTranslation ? ExcelCellBase.TranslateFromR1C1(r1c1Formula, row, colNum) : r1c1Formula);
+                                throw (new InvalidDataException(string.Format("Table {0} Column {1} does not have a unique name.", tbl.Name, col.Name)));
                             }
+                            colVal.Add(n);
+                            if (!string.IsNullOrEmpty(col.CalculatedColumnFormula))
+                            {
+                                int fromRow = tbl.ShowHeader ? tbl.Address._fromRow + 1 : tbl.Address._fromRow;
+                                int toRow = tbl.ShowTotal ? tbl.Address._toRow - 1 : tbl.Address._toRow;
+                                string r1c1Formula = ExcelCellBase.TranslateToR1C1(col.CalculatedColumnFormula, fromRow, colNum);
+                                bool needsTranslation = r1c1Formula != col.CalculatedColumnFormula;
+
+                                for (int row = fromRow; row <= toRow; row++)
+                                {
+                                    SetFormula(row, colNum, needsTranslation ? ExcelCellBase.TranslateFromR1C1(r1c1Formula, row, colNum) : r1c1Formula);
+                                }
+                            }
+                            colNum++;
                         }
-                        colNum++;
                     }
                 }
                 if (tbl.Part == null)
@@ -3359,7 +3369,8 @@ namespace OfficeOpenXml
                     int ix = 0;
                     if (fields != null)
                     {
-                        var flds = new HashSet<string>();
+                        HashSet<string> flds = new HashSet<string>();
+
                         foreach (XmlElement node in fields)
                         {
                             if (ix >= pt.CacheDefinition.SourceRange.Columns) break;
@@ -3377,6 +3388,7 @@ namespace OfficeOpenXml
                             flds.Add(fldName);
                             node.SetAttribute("name", fldName);
                         }
+
                         foreach (var df in pt.DataFields)
                         {
                             if (string.IsNullOrEmpty(df.Name))

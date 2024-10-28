@@ -18,7 +18,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reflection;
-#if NETSTANDARD
+#if NETSTANDARD || NET5_0_OR_GREATER
 using System.Runtime.Loader;
 using Microsoft.Extensions.DependencyModel;
 #endif
@@ -312,7 +312,7 @@ namespace Magicodes.ExporterAndImporter.Core.Extension
         /// <returns></returns>
         public static IList<Assembly> GetAllAssemblies()
         {
-#if NETSTANDARD
+#if NET
             var list = new List<Assembly>();
             var deps = DependencyContext.Default;
             //var libs = deps.CompileLibraries.Where(lib => !lib.Serviceable && lib.Type != "package");
@@ -363,24 +363,17 @@ namespace Magicodes.ExporterAndImporter.Core.Extension
 
             if (!isDisableAllFilter)
             {
-#if NETSTANDARD
                 //判断容器中是否已注册
                 if (AppDependencyResolver.HasInit)
                 {
-                    filter = AppDependencyResolver.Current.GetService<TFilter>();
+                    // 获取符合所需类型的过滤接口
+                    var filters = AppDependencyResolver.Current.GetServices<TFilter>();
+                    filter = filterType == null ? filters.FirstOrDefault() : filters.FirstOrDefault(p => p.GetType() == filterType);
                 }
                 else if (filterType != null && typeof(TFilter).IsAssignableFrom(filterType))
                 {
-                    filter = (TFilter)filterType.Assembly.CreateInstance(filterType.FullName, true, System.Reflection.BindingFlags.Default, null, filterType.CreateType(), null, null);
+                    filter = (TFilter)filterType.Assembly.CreateInstance(filterType.FullName, true, BindingFlags.Default, null, filterType.CreateType(), null, null);
                 }
-
-#else
-                if (filterType != null && typeof(TFilter).IsAssignableFrom(filterType))
-                {
-                    filter = (TFilter)filterType.Assembly.CreateInstance(filterType.FullName, true,
-                        System.Reflection.BindingFlags.Default, null, filterType.CreateType(), null, null);
-                }
-#endif
             }
             return filter;
         }

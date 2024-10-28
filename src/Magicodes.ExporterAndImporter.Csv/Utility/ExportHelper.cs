@@ -5,8 +5,10 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
+using Magicodes.ExporterAndImporter.Core;
 
 namespace Magicodes.ExporterAndImporter.Csv.Utility
 {
@@ -43,18 +45,18 @@ namespace Magicodes.ExporterAndImporter.Csv.Utility
             using (var writer = new StreamWriter(ms, Encoding.UTF8))
             using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
             {
-                csv.Configuration.HasHeaderRecord = true;
+                csv.Context.Configuration.HasHeaderRecord = true;
 
-                if(!string.IsNullOrWhiteSpacedelimiter
-                    csv.Configuration.Delimiter = delimiter;
+                if(!string.IsNullOrWhiteSpace(delimiter))
+                    csv.Context.Configuration.Delimiter = delimiter;
 
                 if (_type == null)
                 {
-                    csv.Configuration.RegisterClassMap<AutoMap<T>>();
+                    csv.Context.RegisterClassMap<AutoMap<T>>();
                 }
                 else
                 {
-                    csv.Configuration.RegisterClassMap<AutoMap<T>>();
+                    csv.Context.RegisterClassMap<AutoMap<T>>();
                 }
 
                 if (dataItems != null && dataItems.Count > 0)
@@ -70,21 +72,22 @@ namespace Magicodes.ExporterAndImporter.Csv.Utility
         /// <summary>
         ///     导出表头
         /// </summary>
-        /// <typeparam name="T"></typeparam>
         /// <returns></returns>
-        public byte[] GetCsvExportHeaderAsByteArray<T>(string delimiter = "") where T : class
+        public byte[] GetCsvExportHeaderAsByteArray(string delimiter = "")
         {
+            var properties = typeof(T).GetSortedPropertyInfos();
+
             using (var ms = new MemoryStream())
             using (var writer = new StreamWriter(ms, Encoding.UTF8))
             using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
             {
-                csv.Configuration.HasHeaderRecord = true;
-                
-                if(!string.IsNullOrWhiteSpacedelimiter
-                    csv.Configuration.Delimiter = delimiter;
+                csv.Context.Configuration.HasHeaderRecord = true;
 
-                #region header 
-                var properties = typeof(T).GetProperties();
+                if (!string.IsNullOrWhiteSpace(delimiter))
+                    csv.Context.Configuration.Delimiter = delimiter;
+
+                #region header
+
                 foreach (var prop in properties)
                 {
                     var name = prop.Name;
@@ -112,20 +115,19 @@ namespace Magicodes.ExporterAndImporter.Csv.Utility
         /// <summary>
         ///     导出Csv
         /// </summary>
-        /// <typeparam name="T"></typeparam>
         /// <param name="dataItems"></param>
         /// <returns></returns>
-        public byte[] GetCsvExportAsByteArray<T>(DataTable dataItems, string delimiter = "") where T : class
+        public byte[] GetCsvExportAsByteArray(DataTable dataItems, string delimiter = "")
         {
             using (var ms = new MemoryStream())
             using (var writer = new StreamWriter(ms, Encoding.UTF8))
             using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
             {
-                csv.Configuration.RegisterClassMap<AutoMap<T>>();
-                csv.Configuration.HasHeaderRecord = true;
-                
-                if(!string.IsNullOrWhiteSpacedelimiter
-                    csv.Configuration.Delimiter = delimiter;
+                csv.Context.RegisterClassMap<AutoMap<T>>();
+                csv.Context.Configuration.HasHeaderRecord = true;
+
+                if (!string.IsNullOrWhiteSpace(delimiter))
+                    csv.Context.Configuration.Delimiter = delimiter;
 
                 //#region header 
                 //var properties = typeof(T).GetProperties();

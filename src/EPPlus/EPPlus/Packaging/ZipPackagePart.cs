@@ -32,6 +32,7 @@ using OfficeOpenXml.Packaging.Ionic.Zip;
 using OfficeOpenXml.Utils;
 using System;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace OfficeOpenXml.Packaging
 {
@@ -89,7 +90,7 @@ namespace OfficeOpenXml.Packaging
         {
             if (_stream == null || fileMode == FileMode.CreateNew || fileMode == FileMode.Create)
             {
-                _stream = RecyclableMemoryStream.GetStream();
+                _stream = new MemoryStream();
             }
             else
             {
@@ -121,7 +122,7 @@ namespace OfficeOpenXml.Packaging
         public Uri Uri { get; private set; }
         public Stream GetZipStream()
         {
-            MemoryStream ms = RecyclableMemoryStream.GetStream();
+            MemoryStream ms = new MemoryStream();
             ZipOutputStream os = new ZipOutputStream(ms);
             return os;
         }
@@ -155,9 +156,35 @@ namespace OfficeOpenXml.Packaging
                 var name = Path.GetFileName(f);
                 _rels.WriteZip(os, (string.Format("{0}_rels/{1}.rels", f.Substring(0, f.Length - name.Length), name)));
             }
-            b = null;
         }
 
+        internal ValueTask WriteZipAsync(ZipOutputStream os)
+        {
+            byte[] b;
+            if (SaveHandler == null)
+            {
+                b = GetStream().ToArray();
+                if (b.Length == 0)   //Make sure the file isn't empty. DotNetZip streams does not seems to handle zero sized files.
+                {
+                    return default;
+                }
+                os.CompressionLevel = (OfficeOpenXml.Packaging.Ionic.Zlib.CompressionLevel)CompressionLevel;
+                os.PutNextEntry(Uri.OriginalString);
+                os.WriteAsync(b, 0, b.Length);
+            }
+            else
+            {
+                SaveHandler(os, (CompressionLevel)CompressionLevel, Uri.OriginalString);
+            }
+
+            if (_rels.Count > 0)
+            {
+                string f = Uri.OriginalString;
+                var name = Path.GetFileName(f);
+                _rels.WriteZipAsync(os, (string.Format("{0}_rels/{1}.rels", f.Substring(0, f.Length - name.Length), name)));
+            }
+            return default;
+        }
 
         public void Dispose()
         {

@@ -59,7 +59,8 @@ namespace Magicodes.ExporterAndImporter.Tests.Models.Export
         [ExporterHeader(DisplayName = "加粗文本", IsBold = true)]
         public string Text { get; set; }
 
-        [ExporterHeader(DisplayName = "普通文本")] public string Text2 { get; set; }
+        [ExporterHeader(DisplayName = "普通文本")] 
+        public string Text2 { get; set; }
 
         [ExporterHeader(DisplayName = "忽略", IsIgnore = true)]
         public string Text3 { get; set; }
@@ -71,7 +72,7 @@ namespace Magicodes.ExporterAndImporter.Tests.Models.Export
         public string Name { get; set; }
     }
 
-    [ExcelExporter(Name = "测试", TableStyle = TableStyles.Light10)]
+    [ExcelExporter(Name = "测试", TableStyle = TableStyles.Light10, ExporterHeaderFilter = typeof(TestExporterHeaderFilter1))]
     public class DIExporterHeaderFilterTestData1
     {
         [ExporterHeader(DisplayName = "加粗文本", IsBold = true)]

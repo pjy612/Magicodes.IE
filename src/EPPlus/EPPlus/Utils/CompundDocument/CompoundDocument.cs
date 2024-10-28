@@ -35,7 +35,7 @@ using System.IO;
 
 namespace OfficeOpenXml.Utils.CompundDocument
 {
-    internal class CompoundDocument
+    internal sealed class CompoundDocument
     {
         internal class StoragePart
         {
@@ -80,7 +80,7 @@ namespace OfficeOpenXml.Utils.CompundDocument
         }
         internal void Read(byte[] doc)
         {
-            Read(RecyclableMemoryStream.GetStream(doc));
+            Read(new MemoryStream(doc));
         }
         internal void Read(MemoryStream ms)
         {

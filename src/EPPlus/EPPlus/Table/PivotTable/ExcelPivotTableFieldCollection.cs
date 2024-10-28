@@ -29,6 +29,7 @@
  * Jan Källman		Added		21-MAR-2011
  * Jan Källman		License changed GPL-->LGPL 2011-12-16
  *******************************************************************************/
+
 using System;
 using System.Collections.Generic;
 using System.Xml;
@@ -55,6 +56,10 @@ namespace OfficeOpenXml.Table.PivotTable
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
         {
             return _list.GetEnumerator();
+        }
+        ~ExcelPivotTableFieldCollectionBase() 
+        {
+            _list = null;
         }
         public int Count
         {

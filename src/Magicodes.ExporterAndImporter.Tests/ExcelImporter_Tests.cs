@@ -32,6 +32,10 @@ using System.Threading.Tasks;
 using Xunit;
 using Xunit.Abstractions;
 using Magicodes.IE.Tests.Models.Import;
+using System.Globalization;
+using SixLabors.ImageSharp;
+using System.Runtime.InteropServices;
+using Codeuctivity.ImageSharpCompare;
 
 namespace Magicodes.ExporterAndImporter.Tests
 {
@@ -246,8 +250,8 @@ namespace Magicodes.ExporterAndImporter.Tests
         public async Task Importer_Test()
         {
             //第一列乱序
-
             var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "产品导入模板.xlsx");
+
             var result = await Importer.Import<ImportProductDto>(filePath);
             result.ShouldNotBeNull();
 
@@ -307,6 +311,35 @@ namespace Magicodes.ExporterAndImporter.Tests
             import.Exception.ShouldBeNull();
             import.Data.Count.ShouldBe(20);
         }
+
+
+        [Fact(DisplayName = "导入结果回调函数测试")]
+        public async Task ImportResultCallBack_Test()
+        {
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "缴费流水导入模板.xlsx");
+            var import = await Importer.Import<ImportPaymentLogDto>(filePath, (importResult) =>
+            {
+                int rowNum = 2;//首行数据对应Excel中的行号
+                foreach (var importPaymentLogDto in importResult.Data)
+                {
+                    if (importPaymentLogDto.Amount > 5000)
+                    {
+                        var dataRowError = new DataRowErrorInfo();
+                        dataRowError.RowIndex = rowNum;
+                        dataRowError.FieldErrors.Add("金额", "金额不能大于5000");
+                        importResult.RowErrors.Add(dataRowError);
+                    }
+                    rowNum++;
+                }
+                return importResult;
+            });
+            import.ShouldNotBeNull();
+            import.HasError.ShouldBeTrue();
+            import.RowErrors.ShouldContain(p => p.RowIndex == 3 && p.FieldErrors.Values.Contains("金额不能大于5000"));
+            import.Exception.ShouldBeNull();
+            import.Data.Count.ShouldBe(20);
+        }
+
 
         [Fact(DisplayName = "必填项检测")]
         public void IsRequired_Test()
@@ -601,6 +634,7 @@ namespace Magicodes.ExporterAndImporter.Tests
             if (import.Exception != null) _testOutputHelper.WriteLine(import.Exception.ToString());
 
             if (import.RowErrors.Count > 0) _testOutputHelper.WriteLine(JsonConvert.SerializeObject(import.RowErrors));
+            if (import.TemplateErrors.Count > 0) _testOutputHelper.WriteLine(JsonConvert.SerializeObject(import.TemplateErrors));
             import.HasError.ShouldBeFalse();
             import.Data.ShouldNotBeNull();
             import.Data.Count.ShouldBe(16);
@@ -694,6 +728,46 @@ namespace Magicodes.ExporterAndImporter.Tests
             var errorRows = import.Data.Where((x, i) => import.RowErrors.Any(err => err.RowIndex == i + 2)).ToList();
 
             var labelErrorImport = await Importer.Import<ImportWithOnlyErrorRowsDto>(labelErrorFilePath);
+            labelErrorImport.ShouldNotBeNull();
+            if (labelErrorImport.Exception != null) _testOutputHelper.WriteLine(labelErrorImport.Exception.ToString());
+
+            if (labelErrorImport.RowErrors.Count > 0) _testOutputHelper.WriteLine(JsonConvert.SerializeObject(labelErrorImport.RowErrors));
+
+            labelErrorImport.Data.Count.ShouldBe(3);
+            labelErrorImport.RowErrors.Count.ShouldBe(3);
+            foreach (var errorRow in errorRows)
+            {
+                labelErrorImport.Data.ShouldContain(x => x.Name == errorRow.Name && x.IdCard == errorRow.IdCard);
+            }
+        }
+
+        /// <summary>
+        ///     仅导出错误列测试流返回
+        /// </summary>
+        /// <returns></returns>
+        [Fact(DisplayName = "仅导出错误列测试流返回")]
+        public async Task ImportOnlyErrorRowsByStream()
+        {
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "过滤学生基础数据导入.xlsx");
+            using var errorStream = new MemoryStream();
+            var fs = new FileStream(filePath, FileMode.Open);
+            var import = await Importer.Import<ImportWithOnlyErrorRowsDto>(fs, errorStream);
+            import.ShouldNotBeNull();
+            if (import.Exception != null) _testOutputHelper.WriteLine(import.Exception.ToString());
+
+            if (import.RowErrors.Count > 0) _testOutputHelper.WriteLine(JsonConvert.SerializeObject(import.RowErrors));
+
+            import.RowErrors.ShouldContain(p => p.RowIndex == 2 && p.FieldErrors.ContainsKey("身份证号"));
+            import.RowErrors.ShouldContain(p => p.RowIndex == 3 && p.FieldErrors.ContainsKey("身份证号"));
+            import.RowErrors.ShouldContain(p => p.RowIndex == 13 && p.FieldErrors.ContainsKey("身份证号"));
+
+            import.HasError.ShouldBeTrue();
+            import.RowErrors.Count.ShouldBe(3);
+
+            var errorRows = import.Data.Where((x, i) => import.RowErrors.Any(err => err.RowIndex == i + 2)).ToList();
+
+            errorStream.Seek(0, SeekOrigin.Begin);
+            var labelErrorImport = await Importer.Import<ImportWithOnlyErrorRowsDto>(errorStream);
             labelErrorImport.ShouldNotBeNull();
             if (labelErrorImport.Exception != null) _testOutputHelper.WriteLine(labelErrorImport.Exception.ToString());
 
@@ -816,21 +890,29 @@ namespace Magicodes.ExporterAndImporter.Tests
             if (import.RowErrors.Count > 0) _testOutputHelper.WriteLine(JsonConvert.SerializeObject(import.RowErrors));
             foreach (var item in import.Data)
             {
-                File.Exists(item.Img).ShouldBeTrue();
+                if (item.Img != null)
+                    File.Exists(item.Img).ShouldBeTrue();
                 File.Exists(item.Img1).ShouldBeTrue();
             }
 
-            //添加严格校验，防止图片位置错误等问题
-            var image1 = new FileInfo(Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "1.Jpeg"));
-            var image2 = new FileInfo(Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "3.Jpeg"));
-            var image3 = new FileInfo(Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "4.Jpeg"));
-            var image4 = new FileInfo(Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "2.Jpeg"));
-            new FileInfo(import.Data.ElementAt(0).Img1).Length.ShouldBe(image1.Length);
-            new FileInfo(import.Data.ElementAt(0).Img).Length.ShouldBe(image2.Length);
-            new FileInfo(import.Data.ElementAt(1).Img1).Length.ShouldBe(image3.Length);
-            new FileInfo(import.Data.ElementAt(1).Img).Length.ShouldBe(image4.Length);
-            new FileInfo(import.Data.ElementAt(2).Img).Length.ShouldBe(image1.Length);
-            new FileInfo(import.Data.ElementAt(2).Img1).Length.ShouldBe(image1.Length);
+            import.Data.ElementAt(3).Img.ShouldBeNullOrEmpty();
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                //添加严格校验，防止图片位置错误等问题
+                var png1 = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "1.Jpeg");
+                var png2 = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "3.Jpeg");
+                var png3 = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "4.Jpeg");
+                var png4 = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Images", "2.Jpeg");
+
+                ImageSharpCompare.ImagesAreEqual(import.Data.ElementAt(0).Img1, png1).ShouldBeTrue();
+                ImageSharpCompare.ImagesAreEqual(import.Data.ElementAt(0).Img, png2).ShouldBeTrue();
+
+                //ImageSharpCompare.ImagesAreEqual(import.Data.ElementAt(1).Img1, png3).ShouldBeTrue();
+                ImageSharpCompare.ImagesAreEqual(import.Data.ElementAt(1).Img, png4).ShouldBeTrue();
+
+                ImageSharpCompare.ImagesAreEqual(import.Data.ElementAt(2).Img1, png1).ShouldBeTrue();
+                ImageSharpCompare.ImagesAreEqual(import.Data.ElementAt(2).Img, png1).ShouldBeTrue();
+            }
         }
 
         [Fact(DisplayName = "导入图片测试头部非第一行")]
@@ -871,7 +953,8 @@ namespace Magicodes.ExporterAndImporter.Tests
             if (import.RowErrors.Count > 0) _testOutputHelper.WriteLine(JsonConvert.SerializeObject(import.RowErrors));
             foreach (var item in import.Data)
             {
-                File.Exists(item.Img).ShouldBeTrue();
+                if (item.Img != null)
+                    File.Exists(item.Img).ShouldBeTrue();
                 item.Img1.ShouldNotBeNull();
             }
         }
@@ -907,15 +990,33 @@ namespace Magicodes.ExporterAndImporter.Tests
             importResult.HasError.ShouldBeFalse();
         }
 
-        [Fact(DisplayName = "ColumnIndex测试")]
+        [Fact(DisplayName = "ColumnIndex导入测试")]
         public async Task ImportTestColumnIndex_Test()
         {
             var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "ColumnIndex导入测试.xlsx");
             var import = await Importer.Import<ImportTestColumnIndex>(filePath);
             import.HasError.ShouldBeFalse();
             import.TemplateErrors.Count.ShouldBe(0);
-            import.ImporterHeaderInfos.Count.ShouldBe(3);
+            import.ImporterHeaderInfos.Count.ShouldBe(5);
             import.Data.ElementAt(0).Age = 11;
+            import.Data.ElementAt(0).ColumnIndexZeroTest = "aaa";
+            import.Data.ElementAt(0).ColumnIndexZeroTest2 = "AAA";
+        }
+
+        [Fact(DisplayName = "ColumnIndex导入模板生成测试")]
+        public async Task ColumnIndexGenerateImportTemplate_Test()
+        {
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), nameof(ColumnIndexGenerateImportTemplate_Test) + ".xlsx");
+            if (File.Exists(filePath)) File.Delete(filePath);
+
+            var result = await Importer.GenerateTemplate<ImportTestColumnIndex>(filePath);
+            using (var pck = new ExcelPackage(new FileInfo(filePath)))
+            {
+                var sheet = pck.Workbook.Worksheets.First();
+                sheet.Cells[1, 2].Value.ShouldBe("Phone");
+            }
+            result.ShouldNotBeNull();
+            File.Exists(filePath).ShouldBeTrue();
         }
 
         [Fact(DisplayName = "合并行数据导入")]
@@ -1034,6 +1135,37 @@ namespace Magicodes.ExporterAndImporter.Tests
             import.Data.Count.ShouldBe(4);
         }
 
+        [Fact]
+        public async Task TimeSpan_Test()
+        {
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", nameof(TimeSpan_Test) + ".xlsx");
+            var import = await Importer.Import<TimeSpanDto>(filePath);
+            import.ShouldNotBeNull();
+            if (import.Exception != null) _testOutputHelper.WriteLine(import.Exception.ToString());
+            import.HasError.ShouldBeTrue();
+            import.RowErrors.Count.ShouldBe(1);
+            for (int i = 0; i < import.Data.Count; i++)
+            {
+                var item = import.Data.ElementAt(i);
+                if (i == 0)
+                {
+                    item.TimeSpan1.ShouldBe(TimeSpan.Parse("1"));
+                    item.TimeSpan2.ShouldBe(item.TimeSpan1);
+                }
+                if (i == 1)
+                {
+                    item.TimeSpan1.ShouldBe(TimeSpan.Parse("2"));
+                    item.TimeSpan2.ShouldBeNull();
+                }
+                if (i == 3)
+                {
+                    item.TimeSpan1.ShouldBe(TimeSpan.Parse("6:12"));
+                    item.TimeSpan2.ShouldBe(item.TimeSpan1);
+                }
+            }
+        }
+
+
         [Fact(DisplayName = "DynamicStringLength")]
         public async Task DynamicStringLength_Test()
         {
@@ -1049,6 +1181,7 @@ namespace Magicodes.ExporterAndImporter.Tests
         [Fact(DisplayName = "RequiredIf")]
         public async Task RequiredIf_Test()
         {
+
             var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "requiredif.xlsx");
             var import = await Importer.Import<RequiredIfAttributeImportDto>(filePath);
 
@@ -1056,6 +1189,26 @@ namespace Magicodes.ExporterAndImporter.Tests
             import.RowErrors.Count.ShouldBe(1);
             import.RowErrors[0].FieldErrors.Count.ShouldBe(1);
             import.RowErrors[0].FieldErrors.ShouldContainKeyAndValue("名称", "名称不能为空");
+
+            //其他语言下测试
+            System.Threading.Thread.CurrentThread.CurrentCulture = new CultureInfo("en", false);
+            Resource.Culture = new CultureInfo("en", false);
+            import = await Importer.Import<RequiredIfAttributeImportDto>(filePath);
+
+            import.HasError.ShouldBeTrue();
+            import.RowErrors.Count.ShouldBe(1);
+            import.RowErrors[0].FieldErrors.Count.ShouldBe(1);
+            import.RowErrors[0].FieldErrors.ShouldContainKeyAndValue("名称", "名称不能为空");
+        }
+
+        [Fact(DisplayName = "#377-链接导入问题")]
+        public async Task Issue377_Test()
+        {
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "TestFiles", "Import", "LinkTest.xlsx");
+            var import = await Importer.Import<Issue377>(filePath);
+
+            import.HasError.ShouldBeFalse();
+            import.Data.Count.ShouldBe(3);
         }
     }
 }
